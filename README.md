@@ -78,13 +78,15 @@ make reset            # удалить volumes и .secrets
 
 - tenant `lmlog` и ключ `lmlog`;
 - tenant `ops-console` и ключ `ops-console-playground`;
-- квоты RPM/TPM для `lmlog`;
+- квоты RPM/TPM для `lmlog` и `ops-console` (playground делит Ollama с lmlog);
 - `.secrets/runtime.env` с `GOGATE_API_KEY` и `GOGATE_PLAYGROUND_API_KEY`.
 
 Файл `.secrets/runtime.env` подключается как `env_file` к `lmlog-api` и
-`ops-console`; в git он не попадает. Ключи можно пересоздать через `make keys`
-(старый ключ при этом не отзывается автоматически — отзовите его через admin API,
-если нужна ротация).
+`ops-console`; в git он не попадает. `gogate` получает отдельный
+`.secrets/gogate.env`, куда `make init-env` копирует только `GOGATE_*` и
+`OTEL_*` — без токенов консоли, lmlog и пароля Grafana. Ключи можно пересоздать
+через `make keys` (старый ключ при этом не отзывается автоматически — отзовите
+его через admin API, если нужна ротация).
 
 ## Модель
 
@@ -138,6 +140,8 @@ make reset            # удалить volumes и .secrets
 | `LMLOG_MODEL` | должен совпадать с `OLLAMA_MODEL` |
 | `LMLOG_API_TOKEN` | Bearer для lmlog и ops-console |
 | `CONSOLE_AUTH_TOKEN` | вход в ops-console |
+| `GOGATE_JAEGER_PUBLIC_URL` | browser-facing Jaeger UI (`http://localhost:16686`) |
+| `OPS_GATEWAY_*` | квоты для playground-ключа `ops-console` |
 
 ## Troubleshooting
 

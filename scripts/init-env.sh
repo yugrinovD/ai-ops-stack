@@ -9,7 +9,15 @@ if [[ ! -f .secrets/runtime.env ]]; then
   chmod 600 .secrets/runtime.env
 fi
 
+# gogate only needs its own settings plus the OTel endpoint. Do not hand it the
+# console/lmlog tokens or the Grafana password from the shared .env.
+write_gogate_env() {
+  grep -E '^(GOGATE_[A-Z0-9_]+|OTEL_[A-Z0-9_]+)=' .env > .secrets/gogate.env || true
+  chmod 600 .secrets/gogate.env
+}
+
 if [[ -f .env ]]; then
+  write_gogate_env
   echo "==> .env already exists; leaving it unchanged"
   exit 0
 fi
@@ -50,5 +58,6 @@ set_value CONSOLE_SESSION_SECRET "$console_secret"
 set_value GF_SECURITY_ADMIN_PASSWORD "$grafana_password"
 
 chmod 600 .env .secrets/runtime.env
+write_gogate_env
 echo "==> wrote .env with random local secrets"
 echo "==> run 'make up' to pull the model, start the stack and create gateway keys"
