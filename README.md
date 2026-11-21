@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/yugrinovD/ai-ops-stack)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/yugrinovD/ai-ops-stack?sort=semver)](https://github.com/yugrinovD/ai-ops-stack/releases)
 ![Docker Compose](https://img.shields.io/badge/docker%20compose-v2-2496ED?logo=docker&logoColor=white)
 
 `ai-ops-stack` — входная точка в портфель: compose-стек, bootstrap ключей,
@@ -106,6 +107,10 @@ make up
 
 ## Демо
 
+[![Demo](docs/demo-poster.jpg)](docs/demo.mp4)
+
+Короткий UI-highlight: dashboard → playground → compare → logs → traces → keys.
+
 | Скриншот | Что видно |
 | --- | --- |
 | ![Dashboard](docs/screenshots/dashboard.jpg) | RPS, latency, errors, tokens, cost, cache hit |
@@ -131,6 +136,7 @@ make up
 
 - [Operations](docs/OPERATIONS.md) · [English](docs/OPERATIONS.en.md)
 - [AI workflow](AI_WORKFLOW.md)
+- [Changelog](CHANGELOG.md)
 - [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.md) · [EN](docs/adr/0001-llm-ownership.en.md)
 - [gogate: design, benchmarks, threat model, ADR](https://github.com/yugrinovD/gogate)
 - [lmlog: design](https://github.com/yugrinovD/lmlog)
@@ -142,9 +148,9 @@ make up
 Текущий срез — `v0.1.0` (первый публичный набор).
 
 Готово: gateway, log intelligence, console, ledger, compose, smoke/fallback,
-метрики, трейсы, тесты.
+метрики, трейсы, тесты, resource limits, CI parity и demo video.
 
-Дальше: resource limits, release artifacts, CI parity и demo video.
+Дальше: GitHub Releases и release artifacts.
 
 ## Лицензия
 

@@ -37,5 +37,9 @@ Close unrelated browser tabs and terminal history.
 - `docs/demo-poster.jpg` — poster for the README;
 - optional `docs/demo.gif` — 10–15 second highlight.
 
+The committed `docs/demo.mp4` is a 28-second UI highlight recorded from the
+Playwright mock stack. It is intentionally short; the full 3–5 minute script
+above is for a manual walkthrough with voice-over.
+
 If the MP4 is hosted externally, keep a stable unlisted URL in the README and
 commit only the poster + link.
