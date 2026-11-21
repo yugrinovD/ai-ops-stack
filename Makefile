@@ -5,7 +5,7 @@ COMPOSE ?= docker compose
         config logs ps
 
 help:
-	@echo "aifirst shared AI stack"
+	@echo "AI Ops Stack"
 	@echo "  make init-env       generate .env and empty .secrets/runtime.env"
 	@echo "  make up             pull the model, start the stack and create gateway keys"
 	@echo "  make pull-model     pull the pinned model"

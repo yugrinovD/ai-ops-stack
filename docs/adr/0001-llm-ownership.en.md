@@ -14,7 +14,7 @@ about Ollama at all.
 ## Decision
 
 1. **Ollama is shared external infrastructure.** The full stack starts it in
-   `infra/docker-compose.yml`; port `11434` is not published to the host.
+   `ai-ops-stack/docker-compose.yml`; port `11434` is not published to the host.
 2. **`gogate` is the single owner of the LLM integration.** Providers, timeouts,
    retries, fallback, rate limits, cache, metrics, cost and audit live there.
 3. **`lmlog` is a consumer.** By default (`LMLOG_LLM_MODE=gateway`) it calls
@@ -34,7 +34,7 @@ about Ollama at all.
 - There is a network dependency `lmlog → gogate`; it is intentional and covered
   by the fallback.
 - Standalone development must explicitly use `LMLOG_LLM_MODE=direct` and must not
-  run together with `infra/`.
+  run together with `ai-ops-stack/`.
 
 ## Alternatives
 

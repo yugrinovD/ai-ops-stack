@@ -1,156 +1,151 @@
-# aifirst shared AI stack
+# AI Ops Stack
 
-A shared Compose stack for `gogate`, `lmlog` and `ops-console`. Ollama is
-**shared external infrastructure**, not a part of either service.
+One local stack for AI traffic, logs and an operations console.
+
+[![CI](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/yugrinovD/ai-ops-stack)](LICENSE)
+![Docker Compose](https://img.shields.io/badge/docker%20compose-v2-2496ED?logo=docker&logoColor=white)
+
+`ai-ops-stack` is the entry point for the portfolio: a Compose stack, key
+bootstrap, smoke tests, screenshots and documentation. Business logic lives in
+the four projects below.
+
+## Projects
+
+| Project | What it demonstrates |
+| --- | --- |
+| **[gogate](https://github.com/yugrinovD/gogate)** | Go LLM gateway: OpenAI-compatible API, retry/fallback before the first byte, RPM/TPM, cache, cost budgets, audit, Prometheus/OTel. 500 RPS, p99 < 1 ms on mock. |
+| **[lmlog](https://github.com/yugrinovD/lmlog)** | Python log intelligence: signatures, ERROR clusters, trends, deduplication, heuristic/LLM explanations. ~90,000 lines/s, designed for 50M+ lines/day. |
+| **[ops-console](https://github.com/yugrinovD/ops-console)** | Next.js BFF/UI: dashboard, playground, SSE, RBAC, log analysis, traces, alerts, Playwright. |
+| **[ledger](https://github.com/yugrinovD/ledger)** | Go double-entry ledger: idempotency, outbox, reconciliation, Kafka/Redpanda, 2000 req/s in benchmarks. |
+
+`ledger` is a separate Go project. `make up` here starts the AI path
+(`gogate` + `lmlog` + `ops-console`); ledger runs from its own repository.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph stack[Shared stack]
-        O[ollama<br/>model volume, internal :11434]
-        G[gogate<br/>LLM gateway]
-        L[lmlog-api<br/>log analysis]
-        C[ops-console<br/>Next.js BFF]
-        P[Prometheus]
-        F[Grafana]
-        J[Jaeger]
-        DB[(PostgreSQL)]
-        R[(Redis)]
-    end
-
+    U[Browser] --> C[ops-console]
+    C -->|admin + public| G[gogate]
+    C -->|/api/v1| L[lmlog]
     L -->|OpenAI-compatible /v1| G
-    C -->|admin + public| G
-    C -->|/api/v1| L
-    G -->|/api/tags, /api/chat| O
-    G --> DB
-    G --> R
-    G --> P
-    G --> J
+    G --> O[Ollama]
+    G --> PG[(PostgreSQL)]
+    G --> R[(Redis)]
+    L --> S[(SQLite snapshots)]
+
+    G --> P[Prometheus]
+    P --> F[Grafana]
+    G --> J[Jaeger]
+    C --> P
+    C --> J
+
+    subgraph ledger[Ledger, separate compose]
+        A[ledger-api] --> LP[(PostgreSQL)]
+        A --> RP[(Redpanda)]
+        W[ledger-worker] --> RP
+        W --> LP
+    end
 ```
 
-## Ownership
-
-| Component | Owns | Does not do |
-| --- | --- | --- |
-| `ollama` | models, volume, `ollama pull` | not published to the host |
-| `gogate` | providers, timeouts, retries, fallback, limits, cache, metrics, cost, audit | no log analysis |
-| `lmlog-api` | ingest, signatures, errors, trends, heuristics | no direct Ollama access in this stack |
-| `ops-console` | UI/BFF, aggregation of gogate + lmlog | no Ollama knowledge |
+See [docs/OPERATIONS.en.md](docs/OPERATIONS.en.md) and
+[ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.en.md).
 
 ## Quick start
 
-Requirements: Docker Compose v2, `make`, `curl`, `jq`, `openssl`.
+Requirements: Docker Compose v2, `make`, `curl`, `jq`, `openssl`. Go, Python and
+Node are only needed to run individual projects outside Docker.
 
-```bash
-cd infra
-make init-env   # .env + empty .secrets/runtime.env
-make up         # postgres/redis/ollama → ollama pull → gogate → keys → lmlog/ops
+Compose builds images from sibling directories, so keep the repositories next to
+each other:
+
+```text
+workspace/
+  ai-ops-stack/
+  gogate/
+  lmlog/
+  ops-console/
+  ledger/
 ```
 
-The first `make up` downloads the model (`qwen2.5:3b`, about 2 GB) and can take
-a few minutes.
+```bash
+git clone git@github.com:yugrinovD/ai-ops-stack.git
+cd ai-ops-stack
+
+./scripts/clone-all.sh   # clones gogate, lmlog, ops-console, ledger next to this repo
+make init-env            # .env + .secrets/runtime.env
+make up                  # postgres/redis/ollama -> pull -> gogate -> keys -> lmlog/ops
+make smoke               # health + upload + explain (expects source=llm)
+```
+
+The first run downloads `qwen2.5:3b` (~2 GB) and may take several minutes.
 
 After startup:
 
 - UI: <http://localhost:3100> (`CONSOLE_AUTH_TOKEN` from `.env`)
 - gogate API: <http://localhost:8080/v1>
 - gogate admin: <http://localhost:9090/admin/v1>
-- lmlog health: <http://localhost:8090/healthz>
+- lmlog: <http://localhost:8090/healthz>
 - Prometheus: <http://localhost:9092>
 - Grafana: <http://localhost:3000>
 - Jaeger: <http://localhost:16686>
 
-Useful targets:
+Degradation check:
 
 ```bash
-make smoke            # health + upload + explain; expects source=llm
 make smoke-fallback   # stops gogate and expects source=heuristic
-SMOKE_REQUIRE_LLM=0 make smoke   # allow heuristic
-make pull-model       # ollama pull only
-make keys             # create/verify gateway keys
-make config           # docker compose config -q
-make down             # stop, keep volumes
-make reset            # remove volumes and .secrets
 ```
 
-## Keys
+Ledger:
 
-`make up` uses the gogate admin API to create:
+```bash
+cd ../ledger
+make up
+```
 
-- tenant `lmlog` and key `lmlog`;
-- tenant `ops-console` and key `ops-console-playground`;
-- RPM/TPM quotas for `lmlog`;
-- `.secrets/runtime.env` with `GOGATE_API_KEY` and
-  `GOGATE_PLAYGROUND_API_KEY`.
+## Demo
 
-`.secrets/runtime.env` is mounted as an `env_file` into `lmlog-api` and
-`ops-console`; it is never committed. `make keys` recreates missing keys; old
-keys are not revoked automatically — rotate them through the admin API.
+| Screenshot | What it shows |
+| --- | --- |
+| ![Dashboard](docs/screenshots/dashboard.jpg) | RPS, latency, errors, tokens, cost, cache hit |
+| ![Playground](docs/screenshots/playground.jpg) | streaming playground with provider/usage |
+| ![Logs](docs/screenshots/logs.jpg) | signatures, ERROR clusters and explain |
+| ![Requests](docs/screenshots/requests.jpg) | audit and span waterfall |
 
-## Model
+Recording plan for the 3–5 minute demo: [docs/DEMO.md](docs/DEMO.md).
 
-- The tag is a single variable, `OLLAMA_MODEL` (default `qwen2.5:3b`).
-- `GOGATE_OLLAMA_MODELS` and `LMLOG_MODEL` derive from it.
-- The model is never baked into an image: `ollama-pull` is a one-shot job and
-  `make pull-model` re-runs it.
-- Ollama does not publish `11434` on the host; it is `expose`d inside the stack.
-- `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`.
+## Ownership
 
-## Standalone modes
-
-| Mode | Ollama | `LMLOG_LLM_MODE` |
+| Component | Owns | Does not do |
 | --- | --- | --- |
-| `infra/` (full stack) | started by `infra` | `gateway` |
-| `gogate` standalone | `ai` profile in `gogate/docker-compose.yml` | — |
-| `lmlog` standalone | `ai` profile in `lmlog/docker-compose.yml` | `direct` |
-| `ops-console` standalone | nobody | — |
-
-> **Important:** standalone `ai` profiles and the full stack are mutually
-> exclusive. Do not run two Ollama containers at once: double RAM usage and a
-> `127.0.0.1:11434` conflict. Use `infra/` for the full stack.
-
-## Degradation
-
-- `gogate` down → `lmlog` returns `source=heuristic`; ingest/scan/trends work.
-- Ollama down → `gogate` returns `503`/`all_providers_unavailable`; `lmlog`
-  falls back to heuristics.
-- `lmlog` down → `ops-console` shows degraded, other screens keep working.
-- `lmlog-api` intentionally does not wait for `gogate: service_healthy`: it must
-  start and work without the gateway.
-
-## Environment
-
-See [.env.example](.env.example). `scripts/init-env.sh` generates secrets;
-`scripts/bootstrap-keys.sh` creates gateway keys.
-
-| Variable | Purpose |
-| --- | --- |
-| `OLLAMA_MODEL` | pinned model tag |
-| `GOGATE_OLLAMA_BASE_URL` | `http://ollama:11434` |
-| `GOGATE_OLLAMA_MODELS` | model advertised by `/v1/models` |
-| `GOGATE_ALLOW_PRIVATE_UPSTREAMS` | `true` for internal Ollama |
-| `GOGATE_API_KEY` | lmlog → gogate key (runtime) |
-| `GOGATE_PLAYGROUND_API_KEY` | ops-console → gogate key (runtime) |
-| `LMLOG_LLM_MODE` | `gateway` in this stack |
-| `LMLOG_MODEL` | must match `OLLAMA_MODEL` |
-| `LMLOG_API_TOKEN` | Bearer token for lmlog and ops-console |
-| `CONSOLE_AUTH_TOKEN` | ops-console login |
-
-## Troubleshooting
-
-| Symptom | Check |
-| --- | --- |
-| `source=heuristic` | `LMLOG_LLM_MODE`, `GOGATE_BASE_URL`, `GOGATE_API_KEY`, `/v1/models` |
-| `model_not_found` | `OLLAMA_MODEL` and `GOGATE_OLLAMA_MODELS` differ |
-| `all_providers_unavailable` | Ollama is down or the model was not pulled |
-| `401 invalid_api_key` | key missing/revoked; run `make keys` |
-| lmlog cannot see the key | `.secrets/runtime.env` exists; did you run `make up`? |
-| Two Ollama containers | stop the standalone `ai` profile or `infra` |
-| `bind: address already in use` | change `GOGATE_HTTP_PORT`, `GOGATE_ADMIN_PORT`, `LMLOG_SERVE_PORT`, `CONSOLE_PORT` and other host ports in `.env` |
-| Empty `/v1/models` | `GOGATE_BOOTSTRAP_PROVIDERS=true` and non-empty `GOGATE_OLLAMA_MODELS` |
+| `ai-ops-stack` | Compose, key bootstrap, smoke, demo, docs | no business logic |
+| `gogate` | providers, retry/fallback, limits, cache, cost, audit | no log analysis |
+| `lmlog` | ingest, signatures, errors, trends, explanations | no direct Ollama access in the full stack |
+| `ops-console` | UI/BFF, aggregation of gogate + lmlog | no Ollama knowledge |
+| `ledger` | double-entry, outbox, reconciliation | not part of the AI path |
+| `ollama` | models and inference | not published to the host |
+| `postgres` / `redis` | control plane and hot path | not the source of truth for logs |
 
 ## Documentation
 
-- [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.en.md) ·
-  [RU](docs/adr/0001-llm-ownership.md)
+- [Operations](docs/OPERATIONS.en.md) · [Russian](docs/OPERATIONS.md)
 - [AI workflow](AI_WORKFLOW.md)
-- `gogate/README.md`, `lmlog/README.md`, `ops-console/README.md`
+- [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.en.md) · [RU](docs/adr/0001-llm-ownership.md)
+- [gogate: design, benchmarks, threat model, ADR](https://github.com/yugrinovD/gogate)
+- [lmlog: design](https://github.com/yugrinovD/lmlog)
+- [ops-console: contracts, security, operations](https://github.com/yugrinovD/ops-console)
+- [ledger: ADR, benchmarks, security](https://github.com/yugrinovD/ledger)
+
+## Status
+
+Current slice: `v0.1.0` (first public set).
+
+Done: gateway, log intelligence, console, ledger, Compose, smoke/fallback,
+metrics, traces, tests.
+
+Next: resource limits, release artifacts, CI parity and demo video.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
