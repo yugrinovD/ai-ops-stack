@@ -148,9 +148,11 @@ make up
 Текущий срез — `v0.1.0` (первый публичный набор).
 
 Готово: gateway, log intelligence, console, ledger, compose, smoke/fallback,
-метрики, трейсы, тесты, resource limits, CI parity и demo video.
+метрики, трейсы, тесты, resource limits, CI parity, demo video и
+[GitHub Release v0.1.0](https://github.com/yugrinovD/ai-ops-stack/releases/tag/v0.1.0).
 
-Дальше: GitHub Releases и release artifacts.
+Дальше: GitHub repository metadata (description, topics, homepage) и полное
+3–5-минутное demo с голосом.
 
 ## Лицензия
 
