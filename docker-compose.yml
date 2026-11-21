@@ -1,0 +1,240 @@
+name: aifirst
+
+# Shared AI operations stack.
+#
+# Ownership:
+#   ollama      - shared infrastructure, no public port
+#   gogate      - the only service that talks to Ollama
+#   lmlog-api   - talks to gogate, never to Ollama
+#   ops-console - talks to gogate and lmlog-api, never to Ollama
+#
+# Standalone gogate/lmlog `ai` profiles are mutually exclusive with this stack.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gogate}
+      POSTGRES_USER: ${POSTGRES_USER:-gogate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run make init-env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${GOGATE_REDIS_PASSWORD:?run make init-env}", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis:/data
+    environment:
+      REDIS_PASSWORD: ${GOGATE_REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:0.40.16@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    restart: unless-stopped
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    expose:
+      - "11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # One-shot model pull. The model is never baked into the image.
+  # `make up` waits for this job before starting gogate.
+  ollama-pull:
+    image: ollama/ollama:0.40.16@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:3b}"]
+    volumes:
+      - ollama:/root/.ollama
+
+  gogate:
+    build:
+      context: ../gogate
+      args:
+        VERSION: ${GOGATE_VERSION:-dev}
+        COMMIT: ${GOGATE_COMMIT:-unknown}
+        DATE: ${GOGATE_DATE:-unknown}
+    image: aifirst-gogate:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GOGATE_DATABASE_URL: postgres://${POSTGRES_USER:-gogate}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gogate}?sslmode=disable
+      GOGATE_REDIS_ADDR: redis:6379
+      GOGATE_OLLAMA_BASE_URL: http://ollama:11434
+      GOGATE_OLLAMA_MODELS: ${OLLAMA_MODEL:-qwen2.5:3b}
+      GOGATE_ALLOW_PRIVATE_UPSTREAMS: "true"
+      GOGATE_TRACING_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports:
+      - "127.0.0.1:${GOGATE_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${GOGATE_ADMIN_PORT:-9090}:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROM_PORT:-9092}:9090"
+    volumes:
+      - ../gogate/deploy/prometheus:/etc/prometheus:ro
+      - prometheus:/prometheus
+    depends_on:
+      - gogate
+
+  grafana:
+    image: grafana/grafana:11.6.0@sha256:62d2b9d20a19714ebfe48d1bb405086081bc602aa053e28cf6d73c7537640dfb
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?run make init-env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ../gogate/deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../gogate/deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57.0@sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${JAEGER_PORT:-16686}:16686"
+    depends_on:
+      - gogate
+
+  lmlog-api:
+    build:
+      context: ../lmlog
+      args:
+        INSTALL_SERVE: "true"
+    image: aifirst-lmlog:serve
+    restart: unless-stopped
+    command: ["serve", "--host", "0.0.0.0", "--port", "8090"]
+    env_file:
+      - .secrets/runtime.env
+    environment:
+      LMLOG_API_TOKEN: ${LMLOG_API_TOKEN:?run make init-env}
+      LMLOG_SERVE_DATA_DIR: /serve
+      LMLOG_SERVE_MAX_UPLOAD_MB: ${LMLOG_MAX_UPLOAD_MB:-50}
+      # lmlog is a consumer of gogate; it never talks to Ollama in this stack.
+      LMLOG_LLM_MODE: gateway
+      GOGATE_BASE_URL: http://gogate:8080
+      LMLOG_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+    ports:
+      - "127.0.0.1:${LMLOG_SERVE_PORT:-8090}:8090"
+    volumes:
+      - lmlog-serve:/serve
+    depends_on:
+      # Do not wait for service_healthy: lmlog must stay usable when gogate is
+      # down and fall back to heuristic explanations.
+      gogate:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  ops-console:
+    build:
+      context: ../ops-console
+    image: aifirst-ops-console:local
+    restart: unless-stopped
+    env_file:
+      - .secrets/runtime.env
+    environment:
+      CONSOLE_AUTH_TOKEN: ${CONSOLE_AUTH_TOKEN:?run make init-env}
+      CONSOLE_VIEWER_TOKEN: ${CONSOLE_VIEWER_TOKEN:-}
+      CONSOLE_SESSION_SECRET: ${CONSOLE_SESSION_SECRET:-}
+      CONSOLE_COOKIE_SECURE: ${CONSOLE_COOKIE_SECURE:-false}
+      CONSOLE_LOG_LEVEL: ${CONSOLE_LOG_LEVEL:-info}
+      CONSOLE_DATA_DIR: /data
+      CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:3100}
+      NODE_ENV: production
+      # Service DNS names inside the stack. ops-console has no OLLAMA_* vars.
+      GOGATE_ADMIN_URL: http://gogate:9090
+      GOGATE_ADMIN_TOKEN: ${GOGATE_ADMIN_TOKEN:?run make init-env}
+      GOGATE_PUBLIC_URL: http://gogate:8080
+      GOGATE_JAEGER_URL: http://jaeger:16686
+      GOGATE_JAEGER_SERVICE: gogate
+      PROMETHEUS_URL: http://prometheus:9090
+      LMLOG_API_URL: http://lmlog-api:8090
+      LMLOG_API_TOKEN: ${LMLOG_API_TOKEN:?run make init-env}
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-3100}:3000"
+    volumes:
+      - console-data:/data
+    depends_on:
+      gogate:
+        condition: service_started
+      lmlog-api:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres:
+  redis:
+  prometheus:
+  grafana:
+  ollama:
+  lmlog-serve:
+  console-data:
