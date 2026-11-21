@@ -1,30 +1,36 @@
 # AI Ops Stack
 
-Один локальный стек для AI-трафика, логов и операционной консоли.
-
 [![CI](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/yugrinovD/ai-ops-stack/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/yugrinovD/ai-ops-stack)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/yugrinovD/ai-ops-stack?sort=semver)](https://github.com/yugrinovD/ai-ops-stack/releases)
-![Docker Compose](https://img.shields.io/badge/docker%20compose-v2-2496ED?logo=docker&logoColor=white)
 
-`ai-ops-stack` — входная точка в портфель: compose-стек, bootstrap ключей,
-smoke-тесты, скриншоты и документация. Бизнес-логики здесь нет — она в четырёх
-проектах ниже.
+Локальный стенд вокруг AI-шлюза: `gogate`, `lmlog`, `ops-console` и отдельный
+`ledger`. Поднимается одним `make up`, внешние ключи не нужны — по умолчанию
+mock и Ollama.
+
+Началось с логов: надоело вручную разгребать миллионы строк и искать в них
+ошибки. Из этого вырос `lmlog`, потом понадобился `gogate` — чтобы не тащить
+внешние ключи в тесты, а дальше появилась консоль.
+
+`ledger` — отдельная история. Он не часть AI-контура, просто ещё один проект,
+который было удобно держать рядом.
 
 ## Что внутри
 
-| Проект | Что демонстрирует |
-| --- | --- |
-| **[gogate](https://github.com/yugrinovD/gogate)** | Go LLM gateway: OpenAI-compatible API, retry/fallback до первого байта, RPM/TPM, кэш, cost budgets, audit, Prometheus/OTel. 500 RPS, p99 < 1 ms на mock. |
-| **[lmlog](https://github.com/yugrinovD/lmlog)** | Python log intelligence: сигнатуры, ERROR-кластеры, тренды, дедупликация, heuristic/LLM explanations. ~90 000 строк/с, расчёт на 50M+ строк в сутки. |
-| **[ops-console](https://github.com/yugrinovD/ops-console)** | Next.js BFF/UI: dashboard, playground, SSE, RBAC, разбор логов, трейсы, alerts, Playwright. |
-| **[ledger](https://github.com/yugrinovD/ledger)** | Go double-entry ledger: idempotency, outbox, reconciliation, Kafka/Redpanda, 2000 req/s в benchmark. |
+**gogate** — шлюз к LLM. Принимает OpenAI-совместимые запросы, умеет mock,
+Ollama и любой OpenAI-compatible upstream. На mock держит 500 RPS и p99 меньше
+миллисекунды. Это про прокси, не про скорость модели.
 
-`ledger` — отдельный Go-проект. `make up` в этом репозитории поднимает
-AI-контур (`gogate` + `lmlog` + `ops-console`), ledger запускается из своего
-репозитория.
+**lmlog** — разбор логов. Считает сигнатуры, ошибки и тренды, объясняет через
+локальную LLM или эвристику. На стенде переваривал 12M строк в сутки.
 
-## Архитектура
+**ops-console** — веб-консоль. Дашборд, playground, ключи и квоты, разбор логов
+и трейсы. Браузер общается только с BFF, токены остаются на сервере.
+
+**ledger** — double-entry ledger на Go. Идемпотентность, outbox,
+reconciliation, Kafka/Redpanda. В бенчмарке держит 2000 запросов в секунду.
+
+## Как это связано
 
 ```mermaid
 flowchart LR
@@ -51,15 +57,17 @@ flowchart LR
     end
 ```
 
-Подробнее: [docs/OPERATIONS.md](docs/OPERATIONS.md), [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.md).
+`gogate` — единственный, кто ходит в Ollama. `lmlog` вызывает `gogate`,
+`ops-console` — их обоих. `ledger` поднимается отдельно и с AI-контуром не
+связан.
 
 ## Быстрый старт
 
-Нужны Docker Compose v2, `make`, `curl`, `jq`, `openssl` и Go/Python/Node
-только если вы хотите запускать проекты вне Docker.
+Нужны Docker Compose v2, `make`, `curl`, `jq` и `openssl`. Go, Python и Node
+понадобятся только если запускать проекты вне Docker.
 
-Compose собирает образы из соседних каталогов, поэтому репозитории должны
-лежать рядом:
+Compose собирает образы из соседних каталогов, поэтому репозитории должны лежать
+рядом:
 
 ```text
 workspace/
@@ -74,23 +82,22 @@ workspace/
 git clone git@github.com:yugrinovD/ai-ops-stack.git
 cd ai-ops-stack
 
-./scripts/clone-all.sh   # клонирует gogate, lmlog, ops-console, ledger рядом
+./scripts/clone-all.sh   # клонирует остальные четыре репозитория
 make init-env            # .env + .secrets/runtime.env
-make up                  # postgres/redis/ollama → pull → gogate → ключи → lmlog/ops
+make up                  # postgres/redis/ollama -> pull -> gogate -> ключи -> lmlog/ops
 make smoke               # health + upload + explain (ожидает source=llm)
 ```
 
-Первый запуск скачивает `qwen2.5:3b` (~2 ГБ) и занимает несколько минут.
+Первый запуск качает `qwen2.5:3b` (~2 ГБ) и может занять несколько минут. Два
+Ollama одновременно лучше не запускать: это двойной расход RAM и конфликт порта
+`11434`.
 
 После запуска:
 
 - UI: <http://localhost:3100> (`CONSOLE_AUTH_TOKEN` из `.env`)
 - gogate API: <http://localhost:8080/v1>
-- gogate admin: <http://localhost:9090/admin/v1>
 - lmlog: <http://localhost:8090/healthz>
-- Prometheus: <http://localhost:9092>
-- Grafana: <http://localhost:3000>
-- Jaeger: <http://localhost:16686>
+- Prometheus: <http://localhost:9092>, Grafana: <http://localhost:3000>, Jaeger: <http://localhost:16686>
 
 Проверка деградации:
 
@@ -98,7 +105,7 @@ make smoke               # health + upload + explain (ожидает source=llm)
 make smoke-fallback   # останавливает gogate и ожидает source=heuristic
 ```
 
-Ledger:
+`ledger` запускается из своего каталога:
 
 ```bash
 cd ../ledger
@@ -109,49 +116,28 @@ make up
 
 [![Demo](docs/demo-poster.jpg)](docs/demo.mp4)
 
-Короткий UI-highlight: dashboard → playground → compare → logs → traces → keys.
+Короткий UI-highlight: dashboard, playground, compare, logs, traces и keys.
+Полный сценарий на 3–5 минут лежит в [docs/DEMO.md](docs/DEMO.md).
 
-| Скриншот | Что видно |
+| | |
 | --- | --- |
-| ![Dashboard](docs/screenshots/dashboard.jpg) | RPS, latency, errors, tokens, cost, cache hit |
-| ![Playground](docs/screenshots/playground.jpg) | streaming playground с provider/usage |
-| ![Logs](docs/screenshots/logs.jpg) | сигнатуры, ERROR-кластеры и explain |
-| ![Requests](docs/screenshots/requests.jpg) | audit и span waterfall |
+| ![Dashboard](docs/screenshots/dashboard.jpg) | ![Logs](docs/screenshots/logs.jpg) |
 
-Сценарий записи demo-видео (3–5 минут): [docs/DEMO.md](docs/DEMO.md).
+## Что не докручено
 
-## Владение компонентами
+- Ollama работает на CPU с моделью 3B. Для демо хватает, для продакшена — нет.
+- Полное видео с голосом пока не записано, есть только 28-секундный highlight.
+- В `ops-console` простой токен и две роли. Это не IdP.
+- `lmlog` хранит состояние в SQLite и рассчитан на один процесс.
+- `ledger` специально не production-PSP: без PCI DSS, KYC/AML и FX.
 
-| Компонент | Отвечает за | Не делает |
-| --- | --- | --- |
-| `ai-ops-stack` | compose, bootstrap ключей, smoke, demo, документация | не содержит бизнес-логики |
-| `gogate` | провайдеры, retry/fallback, rate limit, кэш, стоимость, audit | не анализирует логи |
-| `lmlog` | ingest, сигнатуры, ошибки, тренды, объяснения | не ходит в Ollama в полном стеке |
-| `ops-console` | UI/BFF, агрегация gogate + lmlog | не знает про Ollama |
-| `ledger` | double-entry, outbox, reconciliation | не является частью AI-пути |
-| `ollama` | модели и inference | не публикуется наружу |
-| `postgres` / `redis` | control plane и hot path | не являются source of truth для логов |
-
-## Документация
+## Ссылки
 
 - [Operations](docs/OPERATIONS.md) · [English](docs/OPERATIONS.en.md)
 - [AI workflow](AI_WORKFLOW.md)
 - [Changelog](CHANGELOG.md)
-- [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.md) · [EN](docs/adr/0001-llm-ownership.en.md)
-- [gogate: design, benchmarks, threat model, ADR](https://github.com/yugrinovD/gogate)
-- [lmlog: design](https://github.com/yugrinovD/lmlog)
-- [ops-console: contracts, security, operations](https://github.com/yugrinovD/ops-console)
-- [ledger: ADR, benchmarks, security](https://github.com/yugrinovD/ledger)
-
-## Статус
-
-Текущий срез — `v0.1.0` (первый публичный набор).
-
-Готово: gateway, log intelligence, console, ledger, compose, smoke/fallback,
-метрики, трейсы, тесты, resource limits, CI parity, demo video и
-[GitHub Release v0.1.0](https://github.com/yugrinovD/ai-ops-stack/releases/tag/v0.1.0).
-
-Дальше: полное 3–5-минутное demo с голосом.
+- [ADR 0001: LLM ownership](docs/adr/0001-llm-ownership.md)
+- [gogate](https://github.com/yugrinovD/gogate) · [lmlog](https://github.com/yugrinovD/lmlog) · [ops-console](https://github.com/yugrinovD/ops-console) · [ledger](https://github.com/yugrinovD/ledger)
 
 ## Лицензия
 
